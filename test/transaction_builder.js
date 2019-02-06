@@ -1,6 +1,9 @@
 /* global describe, it, beforeEach */
 
 var assert = require('assert')
+if (!assert.hasOwnProperty('rejects')) {
+  assert.rejects = require('rejected-or-not').rejects /* assert.rejects is builtin by node >= 10.0.0 */
+}
 var baddress = require('../src/address')
 var coins = require('../src/coins')
 var bscript = require('../src/script')
