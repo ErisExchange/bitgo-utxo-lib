@@ -7,6 +7,7 @@ var bscript = require('../src/script')
 var btemplates = require('../src/templates')
 var ops = require('bitcoin-ops')
 
+var Promise = require('bluebird')
 var BigInteger = require('bigi')
 var ECPair = require('../src/ecpair')
 var Transaction = require('../src/transaction')

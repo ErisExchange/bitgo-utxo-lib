@@ -1,4 +1,5 @@
 var Buffer = require('safe-buffer').Buffer
+var Promise = require('bluebird')
 var baddress = require('./address')
 var bcrypto = require('./crypto')
 var bscript = require('./script')
