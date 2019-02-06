@@ -10,7 +10,7 @@ var Transaction = require('../src/transaction')
 
 describe('TransactionBuilder', function () {
   var network = NETWORKS['bitcoingold']
-  it('goldtestcase', function () {
+  it('goldtestcase', async function () {
     var value = 50 * 1e8
     var txid = '40c8a218923f23df3692530fa8e475251c50c7d630dccbdfbd92ba8092f4aa13'
     var vout = 0
@@ -28,7 +28,7 @@ describe('TransactionBuilder', function () {
 
     var hashType = Transaction.SIGHASH_ALL | Transaction.SIGHASH_BITCOINCASHBIP143
 
-    txb.sign(0, keyPair, null, hashType, value)
+    await txb.sign(0, keyPair, null, hashType, value)
 
     var tx = txb.build()
     var hex = tx.toHex()

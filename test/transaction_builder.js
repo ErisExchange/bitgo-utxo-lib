@@ -16,7 +16,7 @@ var NETWORKS = require('../src/networks')
 
 var fixtures = require('./fixtures/transaction_builder')
 
-function construct (f, dontSign) {
+async function construct (f, dontSign) {
   var network = NETWORKS[f.network]
   var txb = new TransactionBuilder(network)
 
@@ -25,10 +25,10 @@ function construct (f, dontSign) {
   if (f.expiryHeight !== undefined) txb.setExpiryHeight(f.expiryHeight)
   if (f.versionGroupId !== undefined) txb.setVersionGroupId(parseInt(f.versionGroupId, 16))
 
-  f.inputs.forEach(function (input) {
+  await Promise.all(f.inputs.map(async function (input) {
     var prevTx
     if (input.txRaw) {
-      var constructed = construct(input.txRaw)
+      var constructed = await construct(input.txRaw)
       if (input.txRaw.incomplete) prevTx = constructed.buildIncomplete()
       else prevTx = constructed.build()
     } else if (input.txHex) {
@@ -43,7 +43,7 @@ function construct (f, dontSign) {
     }
 
     txb.addInput(prevTx, input.vout, input.sequence, prevTxScript)
-  })
+  }))
 
   f.outputs.forEach(function (output) {
     if (output.address) {
@@ -56,9 +56,12 @@ function construct (f, dontSign) {
   if (dontSign) return txb
 
   var stages = f.stages && f.stages.concat()
-  f.inputs.forEach(function (input, index) {
+  await Promise.all(f.inputs.map(async function (input, index) {
     if (!input.signs) return
-    input.signs.forEach(function (sign) {
+
+    // Use Promise.reduce to ensure signs are done sequentially. Doing them
+    // concurrently with Promise.all results in test failure.
+    await Promise.reduce(input.signs, async function (_, sign) {
       var keyPair = ECPair.fromWIF(sign.keyPair, network)
       var redeemScript
       var witnessScript
@@ -72,15 +75,15 @@ function construct (f, dontSign) {
       if (sign.witnessScript) {
         witnessScript = bscript.fromASM(sign.witnessScript)
       }
-      txb.sign(index, keyPair, redeemScript, sign.hashType, value, witnessScript)
+      await txb.sign(index, keyPair, redeemScript, sign.hashType, value, witnessScript)
 
       if (sign.stage) {
         var tx = txb.buildIncomplete()
         assert.strictEqual(tx.toHex(), stages.shift())
         txb = TransactionBuilder.fromTransaction(tx, network)
       }
-    })
-  })
+    }, null)
+  }))
 
   return txb
 }
@@ -266,9 +269,9 @@ describe('TransactionBuilder', function () {
         assert.strictEqual(txb.addInput(txHash, 1), 1)
       })
 
-      it('throws if SIGHASH_ALL has been used to sign any existing scriptSigs', function () {
+      it('throws if SIGHASH_ALL has been used to sign any existing scriptSigs', async function () {
         txb.addInput(txHash, 0)
-        txb.sign(0, testKeyPair, undefined, undefined, 0)
+        await txb.sign(0, testKeyPair, undefined, undefined, 0)
 
         assert.throws(function () {
           txb.addInput(txHash, 0)
@@ -313,38 +316,38 @@ describe('TransactionBuilder', function () {
         }, /2NGHjvjw83pcVFgMcA7QvSMh2c246rxLVz9 has no matching Script/)
       })
 
-      it('add second output after signed first input with SIGHASH_NONE', function () {
+      it('add second output after signed first input with SIGHASH_NONE', async function () {
         txb.addInput(txHash, 0)
         txb.addOutput(scripts[0], 2000)
-        txb.sign(0, testKeyPair, undefined, Transaction.SIGHASH_NONE, 0)
+        await txb.sign(0, testKeyPair, undefined, Transaction.SIGHASH_NONE, 0)
         assert.equal(txb.addOutput(scripts[1], 9000), 1)
       })
 
-      it('add first output after signed first input with SIGHASH_NONE', function () {
+      it('add first output after signed first input with SIGHASH_NONE', async function () {
         txb.addInput(txHash, 0)
-        txb.sign(0, testKeyPair, undefined, Transaction.SIGHASH_NONE, 0)
+        await txb.sign(0, testKeyPair, undefined, Transaction.SIGHASH_NONE, 0)
         assert.equal(txb.addOutput(scripts[0], 2000), 0)
       })
 
-      it('add second output after signed first input with SIGHASH_SINGLE', function () {
+      it('add second output after signed first input with SIGHASH_SINGLE', async function () {
         txb.addInput(txHash, 0)
         txb.addOutput(scripts[0], 2000)
-        txb.sign(0, testKeyPair, undefined, Transaction.SIGHASH_SINGLE, 0)
+        await txb.sign(0, testKeyPair, undefined, Transaction.SIGHASH_SINGLE, 0)
         assert.equal(txb.addOutput(scripts[1], 9000), 1)
       })
 
-      it('add first output after signed first input with SIGHASH_SINGLE', function () {
+      it('add first output after signed first input with SIGHASH_SINGLE', async function () {
         txb.addInput(txHash, 0)
-        txb.sign(0, testKeyPair, undefined, Transaction.SIGHASH_SINGLE, 0)
+        await txb.sign(0, testKeyPair, undefined, Transaction.SIGHASH_SINGLE, 0)
         assert.throws(function () {
           txb.addOutput(scripts[0], 2000)
         }, /No, this would invalidate signatures/)
       })
 
-      it('throws if SIGHASH_ALL has been used to sign any existing scriptSigs', function () {
+      it('throws if SIGHASH_ALL has been used to sign any existing scriptSigs', async function () {
         txb.addInput(txHash, 0)
         txb.addOutput(scripts[0], 2000)
-        txb.sign(0, testKeyPair, undefined, undefined, 0)
+        await txb.sign(0, testKeyPair, undefined, undefined, 0)
 
         assert.throws(function () {
           txb.addOutput(scripts[1], 9000)
@@ -354,10 +357,10 @@ describe('TransactionBuilder', function () {
   })
 
   describe('setLockTime', function () {
-    it('throws if if there exist any scriptSigs', function () {
+    it('throws if if there exist any scriptSigs', async function () {
       var txb = new TransactionBuilder()
       txb.addInput(txHash, 0)
-      txb.sign(0, keyPair)
+      await txb.sign(0, keyPair)
 
       assert.throws(function () {
         txb.setLockTime(65535)
@@ -365,8 +368,8 @@ describe('TransactionBuilder', function () {
     })
   })
 
-  describe('sign', function () {
-    it('supports the alternative abstract interface { publicKey, sign }', function () {
+  describe('sign', async function () {
+    it('supports the alternative abstract interface { publicKey, sign }', async function () {
       var keyPair = {
         publicKey: Buffer.alloc(33, 0x03),
         sign: function (hash) { return Buffer.alloc(64) }
@@ -375,16 +378,18 @@ describe('TransactionBuilder', function () {
       var txb = new TransactionBuilder()
       txb.addInput('ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff', 1)
       txb.addOutput('1111111111111111111114oLvT2', 100000)
-      txb.sign(0, keyPair)
+      await txb.sign(0, keyPair)
       assert.equal(txb.build().toHex(), '0100000001ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff010000002c0930060201000201000121030303030303030303030303030303030303030303030303030303030303030303ffffffff01a0860100000000001976a914000000000000000000000000000000000000000088ac00000000')
     })
 
     fixtures.invalid.sign.forEach(function (f) {
-      it('throws on ' + f.exception + (f.description ? ' (' + f.description + ')' : ''), function () {
-        var txb = construct(f, true)
+      it('throws on ' + f.exception + (f.description ? ' (' + f.description + ')' : ''), async function () {
+        var txb = await construct(f, true)
 
-        f.inputs.forEach(function (input, index) {
-          input.signs.forEach(function (sign) {
+        await Promise.all(f.inputs.map(async function (input, index) {
+          // Use Promise.reduce here to ensure that signs are processed sequentially.
+          // If they are all processed in parallel, the expected errors do not all occur.
+          await Promise.reduce(input.signs, async function (_, sign) {
             var keyPairNetwork = NETWORKS[sign.network || f.network]
             var keyPair2 = ECPair.fromWIF(sign.keyPair, keyPairNetwork)
             var redeemScript
@@ -394,22 +399,22 @@ describe('TransactionBuilder', function () {
             }
 
             if (!sign.throws) {
-              txb.sign(index, keyPair2, redeemScript, sign.hashType, sign.value)
+              await txb.sign(index, keyPair2, redeemScript, sign.hashType, sign.value)
             } else {
-              assert.throws(function () {
-                txb.sign(index, keyPair2, redeemScript, sign.hashType, sign.value)
+              await assert.rejects(async function () {
+                await txb.sign(index, keyPair2, redeemScript, sign.hashType, sign.value)
               }, new RegExp(f.exception))
             }
-          })
-        })
+          }, null)
+        }))
       })
     })
   })
 
   describe('build', function () {
     fixtures.valid.build.forEach(function (f) {
-      it('builds "' + f.description + '"', function () {
-        var txb = construct(f)
+      it('builds "' + f.description + '"', async function () {
+        var txb = await construct(f)
         var tx = f.incomplete ? txb.buildIncomplete() : txb.build()
 
         assert.strictEqual(tx.toHex(), f.txHex)
@@ -419,13 +424,13 @@ describe('TransactionBuilder', function () {
     // TODO: remove duplicate test code
     fixtures.invalid.build.forEach(function (f) {
       describe('for ' + (f.description || f.exception), function () {
-        it('throws ' + f.exception, function () {
-          assert.throws(function () {
+        it('rejects ' + f.exception, async function () {
+          await assert.rejects(async function () {
             var txb
             if (f.txHex) {
               txb = TransactionBuilder.fromTransaction(Transaction.fromHex(f.txHex))
             } else {
-              txb = construct(f)
+              txb = await construct(f)
             }
 
             txb.build()
@@ -434,25 +439,25 @@ describe('TransactionBuilder', function () {
 
         // if throws on incomplete too, enforce that
         if (f.incomplete) {
-          it('throws if ' + f.exception, function () {
-            assert.throws(function () {
+          it('rejects if ' + f.exception, async function () {
+            await assert.rejects(async function () {
               var txb
               if (f.txHex) {
                 txb = TransactionBuilder.fromTransaction(Transaction.fromHex(f.txHex))
               } else {
-                txb = construct(f)
+                txb = await construct(f)
               }
 
               txb.buildIncomplete()
             }, new RegExp(f.exception))
           })
         } else {
-          it('does not throw if buildIncomplete', function () {
+          it('does not reject if buildIncomplete', async function () {
             var txb
             if (f.txHex) {
               txb = TransactionBuilder.fromTransaction(Transaction.fromHex(f.txHex))
             } else {
-              txb = construct(f)
+              txb = await construct(f)
             }
 
             txb.buildIncomplete()
@@ -508,12 +513,12 @@ describe('TransactionBuilder', function () {
 
   describe('multisig', function () {
     fixtures.valid.multisig.forEach(function (f) {
-      it(f.description, function () {
-        var txb = construct(f, true)
+      it(f.description, async function () {
+        var txb = await construct(f, true)
         var tx
         var network = NETWORKS[f.network]
 
-        f.inputs.forEach(function (input, i) {
+        await Promise.all(f.inputs.map(async function (input, i) {
           var redeemScript
           if (input.redeemScript) {
             redeemScript = bscript.fromASM(input.redeemScript)
@@ -521,7 +526,9 @@ describe('TransactionBuilder', function () {
             redeemScript = Buffer.from(input.redeemScriptHex, 'hex')
           }
 
-          input.signs.forEach(function (sign) {
+          // Use Promise.reduce to ensure that the signs are processed sequentially.
+          // If we run them simultaneously using Promise.all, we get test failures.
+          await Promise.reduce(input.signs, async function (_, sign) {
             // rebuild the transaction each-time after the first
             if (tx) {
               // do we filter OP_0's beforehand?
@@ -542,14 +549,14 @@ describe('TransactionBuilder', function () {
             }
 
             var keyPair2 = ECPair.fromWIF(sign.keyPair, network)
-            txb.sign(i, keyPair2, redeemScript, sign.hashType, sign.value)
+            await txb.sign(i, keyPair2, redeemScript, sign.hashType, sign.value)
 
             // update the tx
             tx = txb.buildIncomplete()
             // now verify the serialized scriptSig is as expected
             assert.strictEqual(bscript.toASM(tx.ins[i].script), sign.scriptSig)
-          })
-        })
+          }, null)
+        }))
 
         tx = txb.build()
         assert.strictEqual(tx.toHex(), f.txHex)
@@ -587,7 +594,7 @@ describe('TransactionBuilder', function () {
       }, new RegExp('Transaction has absurd fees'))
     })
 
-    it('should classify witness inputs with witness = true during multisigning', function () {
+    it('should classify witness inputs with witness = true during multisigning', async function () {
       var keyPair = ECPair.fromWIF('cRAwuVuVSBZMPu7hdrYvMCZ8eevzmkExjFbaBLhqnDdrezxN3nTS', network)
       var witnessScript = Buffer.from('522102bbbd6eb01efcbe4bd9664b886f26f69de5afcb2e479d72596c8bf21929e352e22102d9c3f7180ef13ec5267723c9c2ffab56a4215241f837502ea8977c8532b9ea1952ae', 'hex')
       var redeemScript = Buffer.from('002024376a0a9abab599d0e028248d48ebe817bc899efcffa1cd2984d67289daf5af', 'hex')
@@ -595,7 +602,7 @@ describe('TransactionBuilder', function () {
       var txb = new TransactionBuilder(network)
       txb.addInput('a4696c4b0cd27ec2e173ab1fa7d1cc639a98ee237cec95a77ca7ff4145791529', 1, 0xffffffff, scriptPubKey)
       txb.addOutput(scriptPubKey, 99000)
-      txb.sign(0, keyPair, redeemScript, null, 100000, witnessScript)
+      await txb.sign(0, keyPair, redeemScript, null, 100000, witnessScript)
       // 2-of-2 signed only once
       var tx = txb.buildIncomplete()
       // Only input is segwit, so txid should be accurate with the final tx
@@ -606,7 +613,7 @@ describe('TransactionBuilder', function () {
       assert.equal(newTxb.inputs[0].witness, true)
     })
 
-    it('should handle badly pre-filled OP_0s', function () {
+    it('should handle badly pre-filled OP_0s', async function () {
       // OP_0 is used where a signature is missing
       var redeemScripSig = bscript.fromASM('OP_0 OP_0 3045022100daf0f4f3339d9fbab42b098045c1e4958ee3b308f4ae17be80b63808558d0adb02202f07e3d1f79dc8da285ae0d7f68083d769c11f5621ebd9691d6b48c0d4283d7d01 52410479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b84104c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee51ae168fea63dc339a3c58419466ceaeef7f632653266d0e1236431a950cfe52a4104f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9388f7b0f632de8140fe337e62a37f3566500a99934c2231b6cb9fd7584b8e67253ae')
       var redeemScript = bscript.fromASM('OP_2 0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8 04c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee51ae168fea63dc339a3c58419466ceaeef7f632653266d0e1236431a950cfe52a 04f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9388f7b0f632de8140fe337e62a37f3566500a99934c2231b6cb9fd7584b8e672 OP_3 OP_CHECKMULTISIG')
@@ -619,14 +626,14 @@ describe('TransactionBuilder', function () {
       var txb = TransactionBuilder.fromTransaction(tx, NETWORKS.testnet)
 
       var keyPair2 = ECPair.fromWIF('91avARGdfge8E4tZfYLoxeJ5sGBdNJQH4kvjJoQFacbgx3cTMqe', network)
-      txb.sign(0, keyPair2, redeemScript)
+      await txb.sign(0, keyPair2, redeemScript)
 
       var tx2 = txb.build()
       assert.equal(tx2.getId(), 'eab59618a564e361adef6d918bd792903c3d41bcf1220137364fb847880467f9')
       assert.equal(bscript.toASM(tx2.ins[0].script), 'OP_0 3045022100daf0f4f3339d9fbab42b098045c1e4958ee3b308f4ae17be80b63808558d0adb02202f07e3d1f79dc8da285ae0d7f68083d769c11f5621ebd9691d6b48c0d4283d7d01 3045022100a346c61738304eac5e7702188764d19cdf68f4466196729db096d6c87ce18cdd022018c0e8ad03054b0e7e235cda6bedecf35881d7aa7d94ff425a8ace7220f38af001 52410479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b84104c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee51ae168fea63dc339a3c58419466ceaeef7f632653266d0e1236431a950cfe52a4104f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9388f7b0f632de8140fe337e62a37f3566500a99934c2231b6cb9fd7584b8e67253ae')
     })
 
-    it('should not classify blank scripts as nonstandard', function () {
+    it('should not classify blank scripts as nonstandard', async function () {
       var tx = new TransactionBuilder()
       tx.addInput('aa94ab02c182214f090e99a0d57021caffd0f195a81c24602b1028b130b63e31', 0)
 
@@ -635,14 +642,14 @@ describe('TransactionBuilder', function () {
 
       // sign, as expected
       tx.addOutput('1Gokm82v6DmtwKEB8AiVhm82hyFSsEvBDK', 15000)
-      tx.sign(0, keyPair)
+      await tx.sign(0, keyPair)
       var txId = tx.build().getId()
       assert.equal(txId, '54f097315acbaedb92a95455da3368eb45981cdae5ffbc387a9afc872c0f29b3')
 
       // and, repeat
       tx = TransactionBuilder.fromTransaction(Transaction.fromHex(incomplete))
       tx.addOutput('1Gokm82v6DmtwKEB8AiVhm82hyFSsEvBDK', 15000)
-      tx.sign(0, keyPair)
+      await tx.sign(0, keyPair)
       var txId2 = tx.build().getId()
       assert.equal(txId, txId2)
     })
