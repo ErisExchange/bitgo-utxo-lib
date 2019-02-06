@@ -375,7 +375,7 @@ describe('TransactionBuilder', function () {
     it('supports the alternative abstract interface { publicKey, sign }', async function () {
       var keyPair = {
         publicKey: Buffer.alloc(33, 0x03),
-        sign: function (hash) { return Buffer.alloc(64) }
+        sign: async function (hash) { return Buffer.alloc(64) }
       }
 
       var txb = new TransactionBuilder()
