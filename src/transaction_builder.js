@@ -1,4 +1,5 @@
 var Buffer = require('safe-buffer').Buffer
+var Promise = require('bluebird')
 var baddress = require('./address')
 var bcrypto = require('./crypto')
 var bscript = require('./script')
@@ -761,7 +762,7 @@ function canSign (input) {
     )
 }
 
-TransactionBuilder.prototype.sign = function (vin, keyPair, redeemScript, hashType, witnessValue, witnessScript) {
+TransactionBuilder.prototype.sign = async function (vin, keyPair, redeemScript, hashType, witnessValue, witnessScript) {
   debug('Signing transaction: (input: %d, hashType: %d, witnessVal: %s, witnessScript: %j)', vin, hashType, witnessValue, witnessScript)
   debug('Transaction Builder network: %j', this.network)
 
@@ -815,22 +816,23 @@ TransactionBuilder.prototype.sign = function (vin, keyPair, redeemScript, hashTy
   }
 
   // enforce in order signing of public keys
-  var signed = input.pubKeys.some(function (pubKey, i) {
-    if (!kpPubKey.equals(pubKey)) return false
-    if (input.signatures[i]) throw new Error('Signature already exists')
+  var signed = await Promise.reduce(input.pubKeys, async function (accum, pubKey, i) {
+    if (!kpPubKey.equals(pubKey)) return accum
+    if (accum.signatures[i]) throw new Error('Signature already exists')
     if (kpPubKey.length !== 33 &&
       input.signType === scriptTypes.P2WPKH) throw new Error('BIP143 rejects uncompressed public keys in P2WPKH or P2WSH')
 
-    var signature = keyPair.sign(signatureHash)
+    var signature = await keyPair.sign(signatureHash)
     if (Buffer.isBuffer(signature)) signature = ECSignature.fromRSBuffer(signature)
 
     debug('Produced signature (r: %s, s: %s)', signature.r, signature.s)
 
-    input.signatures[i] = signature.toScriptSignature(hashType)
-    return true
-  })
+    accum.signatures[i] = signature.toScriptSignature(hashType)
+    return { signatures: accum.signatures, signed: true }
+  }, { signatures: input.signatures, signed: false })
 
-  if (!signed) throw new Error('Key pair cannot sign for this input')
+  if (!signed.signed) throw new Error('Key pair cannot sign for this input')
+  input.signatures = signed.signatures
 }
 
 function signatureHashType (buffer) {
